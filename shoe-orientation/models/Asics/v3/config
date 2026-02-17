@@ -1,0 +1,18 @@
+{
+  "vendorKey": "asics",
+  "version": "3",
+  "input": { "width": 224, "height": 224, "layout": "NCHW", "normalize": "imagenet" },
+  "thresholds": {
+    "left": 0.85,
+    "right": 0.85,
+    "top": 0.80,
+    "bottom": 0.80,
+    "rear": 0.80,
+    "front": 0.80,
+    "angle_left": 0.75,
+    "angle_right": 0.75,
+    "unknown": 0.00
+  },
+  "pairHandling": { "skipIfLowConfidence": true, "minConfidence": 0.75 },
+  "altTemplate": "AUTO: {vendor} {title} – {label} view"
+}
