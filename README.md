@@ -8,7 +8,8 @@ If you are importing this GitHub repo as a **custom app backend** in Shopify and
 
 1. **Web service command**
    - Root directory: `shoe-orientation`
-   - Start command: `uvicorn app:app --host 0.0.0.0 --port $PORT`
+   - Start command: `uvicorn app:app --host 0.0.0.0 --port ${PORT:-10000}`
+   - If you configure service settings manually in Render, make sure this is a **Web Service** (not Static Site / Background Worker) and that the start command includes a port argument.
 
 2. **Environment variables**
    - `SHOPIFY_SHOP` (for example: `your-store.myshopify.com`)
@@ -55,3 +56,15 @@ Optional auth header:
 
 - Existing ALT text is currently overwritten for images that meet confidence threshold.
 - Requests are processed synchronously, so very large products may take longer.
+
+
+## Render "no open ports detected" troubleshooting
+
+If Render reports that no port is open or no port is specified:
+
+1. Confirm the service type is **Web Service**.
+2. Confirm `rootDir` is `shoe-orientation` so Render can find `app.py`.
+3. Confirm start command exactly binds host/port:
+   - `uvicorn app:app --host 0.0.0.0 --port ${PORT:-10000}`
+4. If deploying without `render.yaml`, set the same start command in the Render dashboard.
+5. Check logs for startup crashes (for example missing env vars); if the app exits early, Render also reports no open port.
