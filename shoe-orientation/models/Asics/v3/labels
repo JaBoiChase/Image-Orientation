@@ -1,0 +1,13 @@
+{
+  "labels": [
+    "left",
+    "right",
+    "top",
+    "bottom",
+    "rear",
+    "front",
+    "angle_left",
+    "angle_right",
+    "unknown"
+  ]
+}
