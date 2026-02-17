@@ -1,0 +1,12 @@
+{
+  "classes": [
+    "left",
+    "right",
+    "upper",
+    "outsole",
+    "rear",
+    "angled"
+  ],
+  "img_size": 224,
+  "model_name": "efficientnet_b0"
+}
