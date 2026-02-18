@@ -8,4 +8,6 @@ numpy>=1.26.0
 scikit-learn>=1.4.0
 tqdm>=4.66.0
 fastapi==0.115.8
+python-multipart==0.0.9
 uvicorn[standard]==0.30.6
+
