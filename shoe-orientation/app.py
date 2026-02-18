@@ -221,26 +221,81 @@ HOME_HTML = """
       .row { margin: 12px 0; }
       pre { background: #f6f8fa; padding: 12px; border-radius: 8px; overflow: auto; }
       .hint { color: #555; }
+      .status { margin-top: 16px; font-weight: 600; }
     </style>
   </head>
   <body>
     <h1>Shoe ALT Tagger</h1>
     <p class="hint">Enter a numeric Shopify Product ID and click Run.</p>
-    <form method="post" action="/run">
-      <div class="row">
-        <input name="product_id" placeholder="123456789" required />
-      </div>
-      <div class="row">
-        <input name="min_conf" placeholder="min_conf (default 0.80)" />
-      </div>
-      <div class="row">
-        <input name="secret" placeholder="secret (if enabled)" />
-      </div>
-      <button type="submit">Run</button>
-    </form>
+
+    <div class="row">
+      <input id="product_id" placeholder="Product ID (e.g. 123456789)" />
+    </div>
+    <div class="row">
+      <input id="min_conf" placeholder="min_conf (default 0.80)" />
+    </div>
+    <div class="row">
+      <input id="secret" placeholder="secret (only if enabled)" />
+    </div>
+
+    <button id="runBtn">Run</button>
+
+    <div class="status" id="status"></div>
+    <pre id="out" style="display:none;"></pre>
+
+    <script>
+      const runBtn = document.getElementById("runBtn");
+      const statusEl = document.getElementById("status");
+      const outEl = document.getElementById("out");
+
+      runBtn.addEventListener("click", async () => {
+        const productId = document.getElementById("product_id").value.trim();
+        const minConfRaw = document.getElementById("min_conf").value.trim();
+        const secret = document.getElementById("secret").value.trim();
+
+        if (!productId) {
+          statusEl.textContent = "Please enter a product ID.";
+          return;
+        }
+
+        const payload = { product_id: Number(productId) };
+        if (minConfRaw) payload.min_conf = Number(minConfRaw);
+
+        statusEl.textContent = "Running… (this can take ~10–60s depending on image count)";
+        outEl.style.display = "none";
+        outEl.textContent = "";
+        runBtn.disabled = true;
+
+        try {
+          const res = await fetch("/api/run", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              ...(secret ? {"x-run-secret": secret} : {})
+            },
+            body: JSON.stringify(payload)
+          });
+
+          const text = await res.text();
+          let data;
+          try { data = JSON.parse(text); } catch { data = { raw: text }; }
+
+          statusEl.textContent = res.ok ? "Done." : `Error (${res.status})`;
+          outEl.style.display = "block";
+          outEl.textContent = JSON.stringify(data, null, 2);
+        } catch (e) {
+          statusEl.textContent = "Request failed (network / timeout).";
+          outEl.style.display = "block";
+          outEl.textContent = String(e);
+        } finally {
+          runBtn.disabled = false;
+        }
+      });
+    </script>
   </body>
 </html>
 """
+
 
 @app.get("/", response_class=HTMLResponse)
 def home():
@@ -285,4 +340,5 @@ class RunRequest(BaseModel):
 def run_api(req: RunRequest, _=Depends(require_secret)):
     result = tag_product(req.product_id, req.min_conf if req.min_conf is not None else DEFAULT_MIN_CONF)
     return JSONResponse(result)
+
 
