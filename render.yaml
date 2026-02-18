@@ -4,8 +4,8 @@ services:
     env: python
     rootDir: shoe-orientation
     buildCommand: pip install -r requirements.txt
-    # Render injects PORT at runtime. Fallback to 10000 for local smoke tests.
-    startCommand: uvicorn app:app --host 0.0.0.0 --port ${PORT:-10000}
+    # Use python -m so uvicorn resolves even if scripts dir is not on PATH.
+    startCommand: python -m uvicorn app:app --host 0.0.0.0 --port ${PORT:-10000}
     healthCheckPath: /
     envVars:
       - key: SHOPIFY_API_VERSION
