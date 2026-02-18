@@ -107,39 +107,53 @@ def main():
         transforms.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
     ])
 
-    updates = []
+        updates = []
+    details = []
+    skipped = 0
 
     for node in p["media"]["nodes"]:
         if node.get("__typename") != "MediaImage":
             continue
         if node.get("fileStatus") != "READY":
+            skipped += 1
             continue
 
         img = node.get("image") or {}
         url = img.get("url")
         if not url:
+            skipped += 1
             continue
 
-        # Download and decode image (cross-platform, no temp files)
-        r = requests.get(url, stream=True, timeout=60)
-        r.raise_for_status()
-        pil = Image.open(r.raw).convert("RGB")
+        try:
+            label, conf = predict_via_classifier(vendor, url)
+        except Exception as e:
+            details.append({
+                "media_id": node["id"],
+                "action": "classifier_error",
+                "error": str(e),
+            })
+            skipped += 1
+            continue
 
-        x = tfm(pil).unsqueeze(0).to(device)
-
-        with torch.no_grad():
-            logits = net(x)
-            prob = F.softmax(logits, dim=1)[0]
-            conf, idx = torch.max(prob, dim=0)
-
-        label = classes[int(idx)]
-        conf = float(conf)
-
-        if conf < args.min_conf:
+        if conf < min_conf:
+            details.append({
+                "media_id": node["id"],
+                "label": label,
+                "confidence": conf,
+                "action": "skipped_low_conf",
+            })
+            skipped += 1
             continue
 
         alt = build_alt(title, color, label)
         updates.append({"id": node["id"], "alt": alt})
+        details.append({
+            "media_id": node["id"],
+            "label": label,
+            "confidence": conf,
+            "alt": alt,
+            "action": "update",
+        })
 
     if not updates:
         print("No updates (all low confidence / not READY / non-image).")
@@ -162,3 +176,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
