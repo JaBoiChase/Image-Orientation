@@ -147,15 +147,6 @@ def tag_product(product_id: int, min_conf: float) -> Dict[str, Any]:
     title = p.get("title") or "Product"
     color = normalize_color(extract_unique_variant_option(p, "Color")) or ""
 
-    try:
-        label, conf = predict_via_classifier(vendor, url)
-    except RuntimeError as e:
-        details.append({"media_id": node["id"], "action": "classifier_error", "error": str(e)})
-        skipped += 1
-        continue
-
-    net, classes, img_size = loaded
-
     updates = []
     details = []
     skipped = 0
@@ -166,20 +157,30 @@ def tag_product(product_id: int, min_conf: float) -> Dict[str, Any]:
         if node.get("fileStatus") != "READY":
             skipped += 1
             continue
+
         img = node.get("image") or {}
         url = img.get("url")
         if not url:
             skipped += 1
             continue
 
-        label, conf = predict_via_classifier(vendor, url)
+        try:
+            label, conf = predict_via_classifier(vendor, url)
+        except Exception as e:
+            details.append({
+                "media_id": node.get("id"),
+                "action": "classifier_error",
+                "error": str(e),
+            })
+            skipped += 1
+            continue
 
         if conf < min_conf:
             details.append({
-                "media_id": node["id"],
+                "media_id": node.get("id"),
                 "label": label,
                 "confidence": conf,
-                "action": "skipped_low_conf"
+                "action": "skipped_low_conf",
             })
             skipped += 1
             continue
@@ -187,11 +188,11 @@ def tag_product(product_id: int, min_conf: float) -> Dict[str, Any]:
         alt = build_alt(title, color, label)
         updates.append({"id": node["id"], "alt": alt})
         details.append({
-            "media_id": node["id"],
+            "media_id": node.get("id"),
             "label": label,
             "confidence": conf,
             "alt": alt,
-            "action": "update"
+            "action": "update",
         })
 
     if not updates:
@@ -231,6 +232,7 @@ def tag_product(product_id: int, min_conf: float) -> Dict[str, Any]:
         "skipped": skipped,
         "details": details,
     }
+
 
 # ---------- FastAPI ----------
 app = FastAPI()
@@ -366,6 +368,7 @@ class RunRequest(BaseModel):
 def run_api(req: RunRequest, _=Depends(require_secret)):
     result = tag_product(req.product_id, req.min_conf if req.min_conf is not None else DEFAULT_MIN_CONF)
     return JSONResponse(result)
+
 
 
 
