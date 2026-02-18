@@ -7,8 +7,9 @@ This service classifies product image orientation and updates Shopify image ALT 
 If you are importing this GitHub repo as a **custom app backend** in Shopify and hosting on Render, make sure these are in place:
 
 1. **Web service command**
-   - Root directory: `shoe-orientation`
-   - Start command: `python -m uvicorn app:app --host 0.0.0.0 --port ${PORT:-10000}`
+   - Root directory: repository root (default)
+   - Build command: `pip install -r shoe-orientation/requirements.txt`
+   - Start command: `./start.sh`
    - If you configure service settings manually in Render, make sure this is a **Web Service** (not Static Site / Background Worker) and that the start command includes a port argument.
 
 2. **Environment variables**
@@ -63,10 +64,9 @@ Optional auth header:
 If Render reports that no port is open or no port is specified:
 
 1. Confirm the service type is **Web Service**.
-2. Confirm `rootDir` is `shoe-orientation` so Render can find `app.py`.
-3. Confirm start command exactly binds host/port:
-   - `python -m uvicorn app:app --host 0.0.0.0 --port ${PORT:-10000}`
-4. If deploying without `render.yaml`, set the same start command in the Render dashboard.
+2. Confirm build command installs dependencies from `shoe-orientation/requirements.txt`.
+3. Confirm start command is `./start.sh` (the script binds `0.0.0.0:${PORT:-10000}`).
+4. If deploying without `render.yaml`, set the same build/start commands in the Render dashboard.
 5. Check logs for startup crashes (for example missing env vars); if the app exits early, Render also reports no open port.
 
 
@@ -74,7 +74,17 @@ If Render reports that no port is open or no port is specified:
 
 If Render logs show `bash: line 1: uvicorn: command not found`:
 
-1. Use `python -m uvicorn ...` instead of `uvicorn ...` in your Render start command.
-2. Confirm `rootDir` is `shoe-orientation` so `pip install -r requirements.txt` runs against the correct file.
+1. Set Render start command to `./start.sh` (or `python -m uvicorn ...`, not plain `uvicorn ...`).
+2. Set build command to `pip install -r shoe-orientation/requirements.txt`.
 3. Confirm `uvicorn[standard]==0.30.6` is present in `shoe-orientation/requirements.txt`.
-4. If you changed settings in the Render dashboard manually, redeploy after updating the start command there as well.
+4. If you changed settings in the Render dashboard manually, redeploy after updating both build and start commands there as well.
+
+
+## Start script used by Render
+
+This repository includes `start.sh` at the repo root. The script:
+
+- changes directory to `shoe-orientation`
+- starts the app with `python -m uvicorn app:app --host 0.0.0.0 --port ${PORT:-10000}`
+
+Using the script avoids common issues where Render is configured from the wrong directory or where `uvicorn` is not available as a shell command.

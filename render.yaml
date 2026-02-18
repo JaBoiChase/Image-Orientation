@@ -2,10 +2,10 @@ services:
   - type: web
     name: image-orientation-shopify
     env: python
-    rootDir: shoe-orientation
-    buildCommand: pip install -r requirements.txt
-    # Use python -m so uvicorn resolves even if scripts dir is not on PATH.
-    startCommand: python -m uvicorn app:app --host 0.0.0.0 --port ${PORT:-10000}
+    # Build from repo root so this works whether service was created by Blueprint
+    # or configured manually in the Render dashboard.
+    buildCommand: pip install -r shoe-orientation/requirements.txt
+    startCommand: ./start.sh
     healthCheckPath: /
     envVars:
       - key: SHOPIFY_API_VERSION
