@@ -4,7 +4,7 @@ from typing import Optional, Dict, Any, Tuple, List
 
 import requests
 
-from fastapi import FastAPI, Form, Request, HTTPException, Depends
+from fastapi import FastAPI, Form, Body, Request, HTTPException, Depends
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
@@ -338,17 +338,6 @@ min_conf_val = DEFAULT_MIN_CONF
 def home():
     return HOME_HTML
 
-@app.post("/run", response_class=HTMLResponse)
-def run_form(
-    request: Request,
-    product_id: int = Form(...),
-    min_conf: str = Form(""),
-    secret: str = Form(""),
-):
-    
-from fastapi import Body, HTTPException
-from fastapi.responses import JSONResponse
-
 def gid_to_numeric_product_id(product_gid: str) -> int:
     try:
         return int(str(product_gid).split("/")[-1])
@@ -404,6 +393,7 @@ class RunRequest(BaseModel):
 def run_api(req: RunRequest, _=Depends(require_secret)):
     result = tag_product(req.product_id, req.min_conf if req.min_conf is not None else DEFAULT_MIN_CONF)
     return JSONResponse(result)
+
 
 
 
