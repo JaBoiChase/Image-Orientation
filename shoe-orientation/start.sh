@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -e
 
-cd "$(dirname "$0")/shoe-orientation"
-exec python -m uvicorn app:app --host 0.0.0.0 --port "${PORT:-10000}"
+cd "$(dirname "$0")"
+exec python -m uvicorn app:app --host 0.0.0.0 --port "${PORT}"
+
