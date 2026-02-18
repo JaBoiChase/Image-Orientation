@@ -236,6 +236,15 @@ def tag_product(product_id: int, min_conf: float) -> Dict[str, Any]:
 
 # ---------- FastAPI ----------
 app = FastAPI()
+from fastapi.middleware.cors import CORSMiddleware
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://extensions.shopifycdn.com"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 HOME_HTML = """
 <!doctype html>
@@ -323,7 +332,7 @@ HOME_HTML = """
   </body>
 </html>
 """
-
+min_conf_val = DEFAULT_MIN_CONF
 
 @app.get("/", response_class=HTMLResponse)
 def home():
@@ -336,13 +345,40 @@ def run_form(
     min_conf: str = Form(""),
     secret: str = Form(""),
 ):
+    
+from fastapi import Body, HTTPException
+from fastapi.responses import JSONResponse
+
+def gid_to_numeric_product_id(product_gid: str) -> int:
+    try:
+        return int(str(product_gid).split("/")[-1])
+    except Exception:
+        raise ValueError("Invalid product_gid")
+
+@app.post("/admin/run-alt")
+async def admin_run_alt(payload: dict = Body(...)):
+    product_gid = payload.get("product_gid")
+    if not product_gid:
+        raise HTTPException(status_code=400, detail="Missing product_gid")
+
+    min_conf = float(payload.get("min_conf", DEFAULT_MIN_CONF))
+
+    try:
+        product_id = gid_to_numeric_product_id(product_gid)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid product_gid")
+
+    result = tag_product(product_id, min_conf)
+    return JSONResponse(result)
+
+    
     # secret support for browser form
     if RUN_SECRET:
         if (secret or "") != RUN_SECRET:
             return HTMLResponse("<h2>Unauthorized</h2>", status_code=401)
 
     # parse min_conf safely
-    min_conf_val = DEFAULT_MIN_CONF
+    
     if min_conf.strip():
         try:
             min_conf_val = float(min_conf)
@@ -368,6 +404,7 @@ class RunRequest(BaseModel):
 def run_api(req: RunRequest, _=Depends(require_secret)):
     result = tag_product(req.product_id, req.min_conf if req.min_conf is not None else DEFAULT_MIN_CONF)
     return JSONResponse(result)
+
 
 
 
