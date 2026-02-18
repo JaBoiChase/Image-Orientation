@@ -3,11 +3,6 @@ import pathlib
 from typing import Optional, Dict, Any, Tuple, List
 
 import requests
-import torch
-import torch.nn.functional as F
-from PIL import Image
-from torchvision import transforms
-import timm
 
 from fastapi import FastAPI, Form, Request, HTTPException, Depends
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -18,10 +13,12 @@ from shopify_gql import gql, product_gid, GET_PRODUCT, FILE_UPDATE
 # ---------- Config ----------
 DEFAULT_MIN_CONF = float(os.getenv("MIN_CONF", "0.80"))
 RUN_SECRET = os.getenv("RUN_SECRET", "")  # optional; if set, require it for /api/run and /run
+CLASSIFIER_URL = os.getenv("CLASSIFIER_URL", "").strip()
+CLASSIFIER_SECRET = os.getenv("CLASSIFIER_SECRET", "").strip()
 
 LABEL_TO_TEXT = {
-    "left": "left side view",
-    "right": "right side view",
+    "left": "medial side view",
+    "right": "lateral side view",
     "upper": "upper view",
     "outsole": "outsole view",
     "rear": "rear view",
@@ -58,6 +55,32 @@ def build_alt(product_title: str, color: str, label: str) -> str:
         parts.append(color)
     parts.append(view)
     return " ".join(parts)
+
+def predict_via_classifier(vendor: str, image_url: str):
+    """
+    Calls the external classifier service and returns (label, confidence).
+    """
+    if not CLASSIFIER_URL:
+        raise RuntimeError("Missing CLASSIFIER_URL env var in Render.")
+
+    headers = {"Content-Type": "application/json"}
+    if CLASSIFIER_SECRET:
+        headers["x-classifier-secret"] = CLASSIFIER_SECRET
+
+    resp = requests.post(
+        CLASSIFIER_URL,
+        json={"vendor": vendor, "image_url": image_url},
+        headers=headers,
+        timeout=120,  # classifier + image download time
+    )
+
+    # Provide useful error messages in logs/UI
+    if resp.status_code != 200:
+        raise RuntimeError(f"Classifier error {resp.status_code}: {resp.text}")
+
+    data = resp.json()
+    return data["label"], float(data["confidence"])
+
 
 # ---------- Model cache ----------
 _MODEL_CACHE: Dict[str, Tuple[torch.nn.Module, List[str], int]] = {}
@@ -124,9 +147,12 @@ def tag_product(product_id: int, min_conf: float) -> Dict[str, Any]:
     title = p.get("title") or "Product"
     color = normalize_color(extract_unique_variant_option(p, "Color")) or ""
 
-    loaded = load_vendor_model(vendor)
-    if loaded is None:
-        return {"ok": False, "message": f"No model for vendor '{vendor}'", "vendor": vendor, "updated": 0, "skipped": 0, "details": []}
+    try:
+        label, conf = predict_via_classifier(vendor, url)
+    except RuntimeError as e:
+        details.append({"media_id": node["id"], "action": "classifier_error", "error": str(e)})
+        skipped += 1
+        continue
 
     net, classes, img_size = loaded
 
@@ -146,7 +172,7 @@ def tag_product(product_id: int, min_conf: float) -> Dict[str, Any]:
             skipped += 1
             continue
 
-        label, conf = predict_one(net, classes, img_size, url)
+        label, conf = predict_via_classifier(vendor, url)
 
         if conf < min_conf:
             details.append({
@@ -340,5 +366,6 @@ class RunRequest(BaseModel):
 def run_api(req: RunRequest, _=Depends(require_secret)):
     result = tag_product(req.product_id, req.min_conf if req.min_conf is not None else DEFAULT_MIN_CONF)
     return JSONResponse(result)
+
 
 
