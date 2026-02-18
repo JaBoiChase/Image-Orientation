@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: image-orientation-shopify
+    env: python
+    # Build from repo root so this works whether service was created by Blueprint
+    # or configured manually in the Render dashboard.
+    buildCommand: pip install -r shoe-orientation/requirements.txt
+    startCommand: ./start.sh
+    healthCheckPath: /
+    envVars:
+      - key: SHOPIFY_API_VERSION
+        value: 2025-10
+      - key: MIN_CONF
+        value: "0.80"
