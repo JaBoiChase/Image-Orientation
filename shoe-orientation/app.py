@@ -250,9 +250,25 @@ def home():
 def run_form(
     request: Request,
     product_id: int = Form(...),
-    min_conf: Optional[float] = Form(None),
-    secret: Optional[str] = Form(None),
+    min_conf: str = Form(""),
+    secret: str = Form(""),
 ):
+    # secret support for browser form
+    if RUN_SECRET:
+        if (secret or "") != RUN_SECRET:
+            return HTMLResponse("<h2>Unauthorized</h2>", status_code=401)
+
+    # parse min_conf safely
+    min_conf_val = DEFAULT_MIN_CONF
+    if min_conf.strip():
+        try:
+            min_conf_val = float(min_conf)
+        except ValueError:
+            return HTMLResponse("<h2>Invalid min_conf</h2><p>Use a number like 0.80</p><p><a href='/'>Back</a></p>", status_code=400)
+
+    result = tag_product(product_id, min_conf_val)
+    return HTMLResponse(f"<h2>Result</h2><pre>{result}</pre><p><a href='/'>Back</a></p>")
+    
     # secret support for browser form
     if RUN_SECRET:
         if (secret or "") != RUN_SECRET:
@@ -269,3 +285,4 @@ class RunRequest(BaseModel):
 def run_api(req: RunRequest, _=Depends(require_secret)):
     result = tag_product(req.product_id, req.min_conf if req.min_conf is not None else DEFAULT_MIN_CONF)
     return JSONResponse(result)
+
