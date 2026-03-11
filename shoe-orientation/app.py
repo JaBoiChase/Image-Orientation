@@ -3,13 +3,8 @@ import pathlib
 from typing import Optional, Dict, Any, Tuple, List
 
 import requests
-import torch
-import torch.nn.functional as F
-from PIL import Image
-from torchvision import transforms
-import timm
 
-from fastapi import FastAPI, Form, Request, HTTPException, Depends
+from fastapi import FastAPI, Form, Body, Request, HTTPException, Depends
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
@@ -18,10 +13,12 @@ from shopify_gql import gql, product_gid, GET_PRODUCT, FILE_UPDATE
 # ---------- Config ----------
 DEFAULT_MIN_CONF = float(os.getenv("MIN_CONF", "0.80"))
 RUN_SECRET = os.getenv("RUN_SECRET", "")  # optional; if set, require it for /api/run and /run
+CLASSIFIER_URL = os.getenv("CLASSIFIER_URL", "").strip()
+CLASSIFIER_SECRET = os.getenv("CLASSIFIER_SECRET", "").strip()
 
 LABEL_TO_TEXT = {
-    "left": "left side view",
-    "right": "right side view",
+    "left": "medial side view",
+    "right": "lateral side view",
     "upper": "upper view",
     "outsole": "outsole view",
     "rear": "rear view",
@@ -58,6 +55,32 @@ def build_alt(product_title: str, color: str, label: str) -> str:
         parts.append(color)
     parts.append(view)
     return " ".join(parts)
+
+def predict_via_classifier(vendor: str, image_url: str):
+    """
+    Calls the external classifier service and returns (label, confidence).
+    """
+    if not CLASSIFIER_URL:
+        raise RuntimeError("Missing CLASSIFIER_URL env var in Render.")
+
+    headers = {"Content-Type": "application/json"}
+    if CLASSIFIER_SECRET:
+        headers["x-classifier-secret"] = CLASSIFIER_SECRET
+
+    resp = requests.post(
+        CLASSIFIER_URL,
+        json={"vendor": vendor, "image_url": image_url},
+        headers=headers,
+        timeout=120,  # classifier + image download time
+    )
+
+    # Provide useful error messages in logs/UI
+    if resp.status_code != 200:
+        raise RuntimeError(f"Classifier error {resp.status_code}: {resp.text}")
+
+    data = resp.json()
+    return data["label"], float(data["confidence"])
+
 
 # ---------- Model cache ----------
 _MODEL_CACHE: Dict[str, Tuple[torch.nn.Module, List[str], int]] = {}
@@ -124,12 +147,6 @@ def tag_product(product_id: int, min_conf: float) -> Dict[str, Any]:
     title = p.get("title") or "Product"
     color = normalize_color(extract_unique_variant_option(p, "Color")) or ""
 
-    loaded = load_vendor_model(vendor)
-    if loaded is None:
-        return {"ok": False, "message": f"No model for vendor '{vendor}'", "vendor": vendor, "updated": 0, "skipped": 0, "details": []}
-
-    net, classes, img_size = loaded
-
     updates = []
     details = []
     skipped = 0
@@ -140,20 +157,30 @@ def tag_product(product_id: int, min_conf: float) -> Dict[str, Any]:
         if node.get("fileStatus") != "READY":
             skipped += 1
             continue
+
         img = node.get("image") or {}
         url = img.get("url")
         if not url:
             skipped += 1
             continue
 
-        label, conf = predict_one(net, classes, img_size, url)
+        try:
+            label, conf = predict_via_classifier(vendor, url)
+        except Exception as e:
+            details.append({
+                "media_id": node.get("id"),
+                "action": "classifier_error",
+                "error": str(e),
+            })
+            skipped += 1
+            continue
 
         if conf < min_conf:
             details.append({
-                "media_id": node["id"],
+                "media_id": node.get("id"),
                 "label": label,
                 "confidence": conf,
-                "action": "skipped_low_conf"
+                "action": "skipped_low_conf",
             })
             skipped += 1
             continue
@@ -161,11 +188,11 @@ def tag_product(product_id: int, min_conf: float) -> Dict[str, Any]:
         alt = build_alt(title, color, label)
         updates.append({"id": node["id"], "alt": alt})
         details.append({
-            "media_id": node["id"],
+            "media_id": node.get("id"),
             "label": label,
             "confidence": conf,
             "alt": alt,
-            "action": "update"
+            "action": "update",
         })
 
     if not updates:
@@ -206,8 +233,18 @@ def tag_product(product_id: int, min_conf: float) -> Dict[str, Any]:
         "details": details,
     }
 
+
 # ---------- FastAPI ----------
 app = FastAPI()
+from fastapi.middleware.cors import CORSMiddleware
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://extensions.shopifycdn.com"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 HOME_HTML = """
 <!doctype html>
@@ -221,38 +258,125 @@ HOME_HTML = """
       .row { margin: 12px 0; }
       pre { background: #f6f8fa; padding: 12px; border-radius: 8px; overflow: auto; }
       .hint { color: #555; }
+      .status { margin-top: 16px; font-weight: 600; }
     </style>
   </head>
   <body>
     <h1>Shoe ALT Tagger</h1>
     <p class="hint">Enter a numeric Shopify Product ID and click Run.</p>
-    <form method="post" action="/run">
-      <div class="row">
-        <input name="product_id" placeholder="123456789" required />
-      </div>
-      <div class="row">
-        <input name="min_conf" placeholder="min_conf (default 0.80)" />
-      </div>
-      <div class="row">
-        <input name="secret" placeholder="secret (if enabled)" />
-      </div>
-      <button type="submit">Run</button>
-    </form>
+
+    <div class="row">
+      <input id="product_id" placeholder="Product ID (e.g. 123456789)" />
+    </div>
+    <div class="row">
+      <input id="min_conf" placeholder="min_conf (default 0.80)" />
+    </div>
+    <div class="row">
+      <input id="secret" placeholder="secret (only if enabled)" />
+    </div>
+
+    <button id="runBtn">Run</button>
+
+    <div class="status" id="status"></div>
+    <pre id="out" style="display:none;"></pre>
+
+    <script>
+      const runBtn = document.getElementById("runBtn");
+      const statusEl = document.getElementById("status");
+      const outEl = document.getElementById("out");
+
+      runBtn.addEventListener("click", async () => {
+        const productId = document.getElementById("product_id").value.trim();
+        const minConfRaw = document.getElementById("min_conf").value.trim();
+        const secret = document.getElementById("secret").value.trim();
+
+        if (!productId) {
+          statusEl.textContent = "Please enter a product ID.";
+          return;
+        }
+
+        const payload = { product_id: Number(productId) };
+        if (minConfRaw) payload.min_conf = Number(minConfRaw);
+
+        statusEl.textContent = "Running… (this can take ~10–60s depending on image count)";
+        outEl.style.display = "none";
+        outEl.textContent = "";
+        runBtn.disabled = true;
+
+        try {
+          const res = await fetch("/api/run", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              ...(secret ? {"x-run-secret": secret} : {})
+            },
+            body: JSON.stringify(payload)
+          });
+
+          const text = await res.text();
+          let data;
+          try { data = JSON.parse(text); } catch { data = { raw: text }; }
+
+          statusEl.textContent = res.ok ? "Done." : `Error (${res.status})`;
+          outEl.style.display = "block";
+          outEl.textContent = JSON.stringify(data, null, 2);
+        } catch (e) {
+          statusEl.textContent = "Request failed (network / timeout).";
+          outEl.style.display = "block";
+          outEl.textContent = String(e);
+        } finally {
+          runBtn.disabled = false;
+        }
+      });
+    </script>
   </body>
 </html>
 """
+min_conf_val = DEFAULT_MIN_CONF
 
 @app.get("/", response_class=HTMLResponse)
 def home():
     return HOME_HTML
 
-@app.post("/run", response_class=HTMLResponse)
-def run_form(
-    request: Request,
-    product_id: int = Form(...),
-    min_conf: Optional[float] = Form(None),
-    secret: Optional[str] = Form(None),
-):
+def gid_to_numeric_product_id(product_gid: str) -> int:
+    try:
+        return int(str(product_gid).split("/")[-1])
+    except Exception:
+        raise ValueError("Invalid product_gid")
+
+@app.post("/admin/run-alt")
+async def admin_run_alt(payload: dict = Body(...)):
+    product_gid = payload.get("product_gid")
+    if not product_gid:
+        raise HTTPException(status_code=400, detail="Missing product_gid")
+
+    min_conf = float(payload.get("min_conf", DEFAULT_MIN_CONF))
+
+    try:
+        product_id = gid_to_numeric_product_id(product_gid)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid product_gid")
+
+    result = tag_product(product_id, min_conf)
+    return JSONResponse(result)
+
+    
+    # secret support for browser form
+    if RUN_SECRET:
+        if (secret or "") != RUN_SECRET:
+            return HTMLResponse("<h2>Unauthorized</h2>", status_code=401)
+
+    # parse min_conf safely
+    
+    if min_conf.strip():
+        try:
+            min_conf_val = float(min_conf)
+        except ValueError:
+            return HTMLResponse("<h2>Invalid min_conf</h2><p>Use a number like 0.80</p><p><a href='/'>Back</a></p>", status_code=400)
+
+    result = tag_product(product_id, min_conf_val)
+    return HTMLResponse(f"<h2>Result</h2><pre>{result}</pre><p><a href='/'>Back</a></p>")
+    
     # secret support for browser form
     if RUN_SECRET:
         if (secret or "") != RUN_SECRET:
@@ -269,3 +393,9 @@ class RunRequest(BaseModel):
 def run_api(req: RunRequest, _=Depends(require_secret)):
     result = tag_product(req.product_id, req.min_conf if req.min_conf is not None else DEFAULT_MIN_CONF)
     return JSONResponse(result)
+
+
+
+
+
+
